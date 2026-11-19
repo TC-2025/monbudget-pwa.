@@ -1,0 +1,1582 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <!-- =========================================================================
+       PROJET : MonBudget Local — Application autonome de suivi budgétaire
+       =========================================================================
+       OBJECTIFS DU CAHIER DES CHARGES :
+       1. Fonctionnement 100 % local et hors-ligne (sans serveur, sans internet,
+          sauvegarde automatique dans le navigateur via localStorage).
+       2. Installable sur mobile (PWA autonome) et ouvrable sur ordinateur.
+       3. Saisie quotidienne rapide des entrées et sorties d'argent avec :
+          - Date du jour par défaut + raccourcis week-end (Hier, Avant-hier, etc.)
+            et calendrier interactif pour enregistrer ou corriger des opérations passées.
+          - Classement clair par Thème (Nourriture, Enfants, Famille, Voyage, Dons,
+            Santé, Logement, Auto, etc.) et par Source/Compte (Compte courant, Espèces...).
+       4. Flexibilité totale : ajout et suppression libres de thèmes et sources à la volée.
+       5. Gestion des flux constants (loyer, salaire, dons fixes...) : modifiables en
+          montant ou en jour du mois, désactivables sans perdre l'historique, et
+          injectables en un clic.
+       6. Aide à la décision & pilotage de l'épargne :
+          - Calcul du "Reste à vivre réel" (intégrant les charges fixes non encore débitées).
+          - Moyennes mensuelles par thème et plafonds d'alerte personnalisables.
+          - Graphique d'évolution mensuelle et simulateur d'impact (Projet X / Projet Y).
+       7. Pont complet Import / Export : export tableur multi-onglets (.xls),
+          export CSV brut et sauvegarde/restauration intégrale (.json).
+       ========================================================================= -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1B365D" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="MonBudget" />
+  <title>MonBudget — Pilotage & Épargne Local</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icons/icon-192.png" type="image/png" />
+
+  <style>
+    /* =========================================================================
+       STYLES & CHARTE GRAPHIQUE (Design épuré, mobile-first, contraste élevé)
+       ========================================================================= */
+    :root {
+      --navy: #1B365D;
+      --navy-2: #2C4D75;
+      --teal: #1E847F;
+      --green: #1E8449;
+      --green-bg: #E8F6EF;
+      --amber: #D97706;
+      --amber-bg: #FEF3C7;
+      --red: #C0392B;
+      --red-bg: #FDEDEC;
+      --bg: #F4F7FA;
+      --card: #FFFFFF;
+      --text: #1F2328;
+      --muted: #57606A;
+      --border: #D0D7DE;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding-bottom: 86px; /* Espace réservé pour la barre de navigation fixe en bas */
+    }
+
+    /* En-tête fixe avec sélecteur de mois et injection des charges constantes */
+    header {
+      background: var(--navy);
+      color: #fff;
+      padding: 14px 16px 12px;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.14);
+    }
+    header .top-row { display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 1.12rem; letter-spacing: 0.2px; }
+    header .badge-offline {
+      font-size: 0.72rem;
+      background: rgba(255,255,255,0.16);
+      padding: 4px 9px;
+      border-radius: 20px;
+      font-weight: 600;
+    }
+    .month-bar { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+    .month-bar select, .month-bar button {
+      background: rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.25);
+      color: #fff;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.84rem;
+      font-weight: 600;
+    }
+    .month-bar select option { color: var(--text); background: #fff; }
+
+    /* Conteneur principal et gestion des onglets (vues) */
+    main { max-width: 680px; margin: 0 auto; padding: 14px; }
+    .view { display: none; }
+    .view.active { display: block; }
+
+    /* Cartes d'indicateurs clés (Entrées / Sorties / Épargne) */
+    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+    .kpi {
+      background: var(--card);
+      border-radius: var(--radius);
+      padding: 11px 8px;
+      border: 1px solid var(--border);
+      text-align: center;
+    }
+    .kpi .lbl { font-size: 0.7rem; color: var(--muted); font-weight: 700; text-transform: uppercase; }
+    .kpi .val { font-size: 1.02rem; font-weight: 800; margin-top: 4px; }
+    .kpi.in .val { color: var(--green); }
+    .kpi.out .val { color: var(--red); }
+    .kpi.sav .val { color: var(--navy); }
+
+    /* Bandeau d'aide à la décision : Reste à vivre réel après charges fixes à venir */
+    .projection-box {
+      background: linear-gradient(135deg, #1B365D 0%, #2C4D75 100%);
+      color: #fff;
+      border-radius: var(--radius);
+      padding: 13px 15px;
+      margin-bottom: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .projection-box .p-title { font-size: 0.76rem; opacity: 0.85; font-weight: 600; text-transform: uppercase; }
+    .projection-box .p-val { font-size: 1.25rem; font-weight: 800; margin-top: 2px; }
+    .projection-box .p-sub { font-size: 0.76rem; opacity: 0.88; margin-top: 3px; }
+    .projection-pill {
+      background: rgba(255,255,255,0.16);
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    /* Blocs cartes standards */
+    .card {
+      background: var(--card);
+      border-radius: var(--radius);
+      padding: 15px;
+      border: 1px solid var(--border);
+      margin-bottom: 14px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 0.98rem;
+      color: var(--navy);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Formulaires et sélecteur Entrée / Sortie */
+    .type-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+    .type-btn {
+      padding: 10px;
+      border-radius: 10px;
+      border: 2px solid var(--border);
+      background: #fff;
+      font-weight: 700;
+      font-size: 0.94rem;
+      cursor: pointer;
+      color: var(--muted);
+    }
+    .type-btn.active.out { border-color: var(--red); background: var(--red-bg); color: var(--red); }
+    .type-btn.active.in { border-color: var(--green); background: var(--green-bg); color: var(--green); }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .form-group { display: flex; flex-direction: column; margin-bottom: 9px; }
+    .form-group.full { grid-column: 1 / -1; }
+    label { font-size: 0.77rem; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+    input, select {
+      padding: 10px 11px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      font-size: 0.95rem;
+      background: #fff;
+      color: var(--text);
+      width: 100%;
+    }
+    input:focus, select:focus { outline: none; border-color: var(--navy); }
+    .inline-add { display: flex; gap: 6px; }
+    .inline-add button {
+      padding: 0 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      font-weight: 800;
+      font-size: 1.05rem;
+      color: var(--navy);
+      cursor: pointer;
+    }
+
+    /* Raccourcis de dates pour saisie rétroactive (ex: bilan du week-end) */
+    .date-shortcuts { display: flex; gap: 6px; margin-top: 2px; flex-wrap: wrap; }
+    .date-chip {
+      padding: 5px 9px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--navy);
+      cursor: pointer;
+    }
+    .date-chip.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+    .date-human { font-size: 0.75rem; color: var(--teal); font-weight: 700; margin-top: 4px; }
+
+    /* Boutons d'action */
+    .btn-primary {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 11px;
+      background: var(--navy);
+      color: #fff;
+      font-size: 0.98rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 4px;
+    }
+    .btn-primary:active { opacity: 0.9; }
+    .btn-secondary {
+      padding: 8px 11px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.83rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* Grille du calendrier mensuel interactif */
+    .cal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .cal-header button {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 12px; font-weight: 700; color: var(--navy); cursor: pointer;
+    }
+    .cal-title { font-weight: 800; font-size: 0.98rem; color: var(--navy); text-transform: capitalize; }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+    .cal-dow { font-size: 0.7rem; font-weight: 700; color: var(--muted); padding-bottom: 4px; }
+    .cal-cell {
+      background: var(--bg); border: 1px solid transparent; border-radius: 9px;
+      min-height: 52px; padding: 4px 2px; display: flex; flex-direction: column;
+      justify-content: space-between; cursor: pointer;
+    }
+    .cal-cell.empty { background: transparent; cursor: default; }
+    .cal-cell.today { border-color: var(--teal); background: #EBF7F6; }
+    .cal-cell.selected { border-color: var(--navy); box-shadow: inset 0 0 0 1px var(--navy); background: #E6EEF8; }
+    .cal-day-num { font-size: 0.76rem; font-weight: 700; }
+    .cal-dots { display: flex; flex-direction: column; gap: 1px; font-size: 0.61rem; font-weight: 700; line-height: 1.1; }
+    .cal-in { color: var(--green); }
+    .cal-out { color: var(--red); }
+
+    /* Lignes d'opérations */
+    .op-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 0; border-bottom: 1px solid #EEF2F6;
+    }
+    .op-item:last-child { border-bottom: none; }
+    .op-left .op-title { font-weight: 700; font-size: 0.92rem; }
+    .op-left .op-meta { font-size: 0.76rem; color: var(--muted); margin-top: 2px; }
+    .op-right { text-align: right; display: flex; align-items: center; gap: 6px; }
+    .op-amt { font-weight: 800; font-size: 0.95rem; }
+    .op-amt.in { color: var(--green); }
+    .op-amt.out { color: var(--red); }
+    .icon-btn { background: none; border: none; color: #7D8790; font-size: 0.95rem; cursor: pointer; padding: 4px; }
+
+    /* Barres de progression par thème et badges d'alerte plafond */
+    .bar-row { margin-bottom: 13px; }
+    .bar-head { display: flex; justify-content: space-between; font-size: 0.84rem; margin-bottom: 4px; gap: 6px; }
+    .bar-head .b-name { font-weight: 700; }
+    .bar-head .b-vals { color: var(--muted); font-size: 0.78rem; text-align: right; }
+    .bar-track { height: 10px; background: #E9EEF4; border-radius: 6px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--navy); border-radius: 6px; transition: width 0.3s ease; }
+    .bar-fill.warn { background: var(--amber); }
+    .bar-fill.over { background: var(--red); }
+
+    .badge-cap {
+      font-size: 0.7rem; font-weight: 700; padding: 2px 6px; border-radius: 6px; margin-left: 5px; cursor: pointer;
+    }
+    .badge-cap.ok { background: var(--green-bg); color: var(--green); }
+    .badge-cap.warn { background: var(--amber-bg); color: var(--amber); }
+    .badge-cap.over { background: var(--red-bg); color: var(--red); }
+
+    .chart-wrap { width: 100%; overflow-x: auto; padding-top: 4px; }
+
+    /* Pastilles de gestion des thèmes et sources */
+    .chip-wrap { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
+    .chip {
+      background: var(--bg); border: 1px solid var(--border); padding: 6px 10px;
+      border-radius: 20px; font-size: 0.82rem; font-weight: 600;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .chip span.x { color: var(--red); cursor: pointer; font-weight: 800; }
+
+    /* Barre de navigation basse mobile */
+    nav.bottom-nav {
+      position: fixed; bottom: 0; left: 0; right: 0; background: #fff;
+      border-top: 1px solid var(--border); display: grid; grid-template-columns: repeat(5, 1fr);
+      padding: 6px 0 env(safe-area-inset-bottom, 8px); z-index: 30;
+    }
+    nav.bottom-nav button {
+      background: none; border: none; display: flex; flex-direction: column;
+      align-items: center; gap: 3px; font-size: 0.67rem; font-weight: 600;
+      color: var(--muted); padding: 6px 2px; cursor: pointer;
+    }
+    nav.bottom-nav button.active { color: var(--navy); }
+    nav.bottom-nav button svg { width: 21px; height: 21px; }
+
+    .sim-res {
+      background: var(--bg); border-radius: 10px; padding: 12px;
+      margin-top: 10px; font-size: 0.86rem; line-height: 1.55;
+    }
+    .toast {
+      position: fixed; top: 74px; left: 50%; transform: translateX(-50%);
+      background: #1F2328; color: #fff; padding: 9px 16px; border-radius: 20px;
+      font-size: 0.84rem; font-weight: 600; opacity: 0; pointer-events: none;
+      transition: opacity 0.25s; z-index: 50;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<!-- ===========================================================================
+     EN-TÊTE : Titre, indicateur hors-ligne, filtre de mois et injection des fixes
+     =========================================================================== -->
+<header>
+  <div class="top-row">
+    <h1>MonBudget Local</h1>
+    <span class="badge-offline" id="todayBadge">Hors-ligne</span>
+  </div>
+  <div class="month-bar">
+    <select id="monthFilter"></select>
+    <button type="button" onclick="injectRecurringForMonth()">+ Appliquer fixes</button>
+  </div>
+</header>
+
+<div id="toast" class="toast">Enregistré</div>
+
+<main>
+  <!-- =========================================================================
+       VUE 1 : SAISIE QUOTIDIENNE & JOURNAL DES OPÉRATIONS
+       Objectif : Enregistrer rapidement une dépense ou une entrée d'argent,
+       visualiser le reste à vivre réel et consulter l'historique du mois.
+       ========================================================================= -->
+  <section id="view-saisie" class="view active">
+    <div class="kpi-grid">
+      <div class="kpi in"><div class="lbl">Entrées</div><div class="val" id="kpi-in">0 €</div></div>
+      <div class="kpi out"><div class="lbl">Sorties</div><div class="val" id="kpi-out">0 €</div></div>
+      <div class="kpi sav"><div class="lbl">Net période</div><div class="val" id="kpi-sav">0 €</div></div>
+    </div>
+
+    <!-- Projection des flux du mois après prise en compte des flux fixes non encore injectés -->
+    <div class="projection-box">
+      <div>
+        <div class="p-title">Projection nette du mois (après fixes)</div>
+        <div class="p-val" id="proj-rav">0,00 €</div>
+        <div class="p-sub" id="proj-sub">Toutes vos charges fixes du mois sont couvertes.</div>
+      </div>
+      <div class="projection-pill" id="proj-rate">Taux : 0%</div>
+    </div>
+
+    <!-- Formulaire d'ajout manuel d'une opération -->
+    <div class="card">
+      <h2>Nouvelle opération</h2>
+      <div class="type-toggle">
+        <button type="button" id="btn-type-out" class="type-btn active out" onclick="setOpType('Sortie')">- Sortie</button>
+        <button type="button" id="btn-type-in" class="type-btn in" onclick="setOpType('Entrée')">+ Entrée</button>
+      </div>
+      <form id="opForm" onsubmit="addOperation(event)">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Montant (€)</label>
+            <input type="number" id="opAmount" step="0.01" min="0.01" placeholder="0.00" required />
+          </div>
+          <div class="form-group">
+            <label>Date de l'opération</label>
+            <input type="date" id="opDate" required onchange="onOpDateChange()" />
+            <div class="date-human" id="opDateHuman">Aujourd'hui</div>
+          </div>
+          <!-- Raccourcis pour saisir rapidement les dépenses de la semaine le week-end -->
+          <div class="form-group full" style="margin-top:-4px;">
+            <div class="date-shortcuts">
+              <button type="button" class="date-chip active" data-offset="0" onclick="setRelativeDate(0)">Aujourd'hui</button>
+              <button type="button" class="date-chip" data-offset="-1" onclick="setRelativeDate(-1)">Hier</button>
+              <button type="button" class="date-chip" data-offset="-2" onclick="setRelativeDate(-2)">Avant-hier</button>
+              <button type="button" class="date-chip" data-offset="-3" onclick="setRelativeDate(-3)">Il y a 3j</button>
+              <button type="button" class="date-chip" data-offset="-4" onclick="setRelativeDate(-4)">Il y a 4j</button>
+              <button type="button" class="date-chip" data-offset="-5" onclick="setRelativeDate(-5)">Il y a 5j</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Thème</label>
+            <div class="inline-add">
+              <select id="opTheme"></select>
+              <button type="button" title="Ajouter un thème" onclick="quickAddTheme()">+</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Source / Compte</label>
+            <div class="inline-add">
+              <select id="opSource"></select>
+              <button type="button" title="Ajouter une source" onclick="quickAddSource()">+</button>
+            </div>
+          </div>
+          <div class="form-group full">
+            <label>Note / Détail (optionnel)</label>
+            <input type="text" id="opNote" placeholder="Ex: Courses semaine, Cours maths, Cadeau..." />
+          </div>
+        </div>
+        <button type="submit" class="btn-primary">Enregistrer à cette date</button>
+      </form>
+    </div>
+
+    <!-- Liste chronologique des opérations de la période sélectionnée -->
+    <div class="card">
+      <h2>Historique de la période <span id="opCount" style="font-size:0.8rem;color:var(--muted)"></span></h2>
+      <div id="opList"></div>
+    </div>
+  </section>
+
+  <!-- =========================================================================
+       VUE 2 : CALENDRIER INTERACTIF
+       Objectif : Visualiser les flux jour par jour et saisir directement sur
+       une date passée ou future choisie sur le calendrier.
+       ========================================================================= -->
+  <section id="view-calendrier" class="view">
+    <div class="card">
+      <div class="cal-header">
+        <button type="button" onclick="shiftCalMonth(-1)">◀</button>
+        <div class="cal-title" id="calMonthTitle">Novembre 2026</div>
+        <button type="button" onclick="shiftCalMonth(1)">▶</button>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+    </div>
+
+    <div class="card">
+      <h2>
+        <span id="calSelectedDayTitle">Opérations du jour</span>
+        <button type="button" class="btn-secondary" style="padding:5px 10px;font-size:0.78rem;" onclick="addOnSelectedCalDay()">+ Saisir ce jour</button>
+      </h2>
+      <div id="calDayOps"></div>
+    </div>
+  </section>
+
+  <!-- =========================================================================
+       VUE 3 : ANALYSE STATISTIQUE, MOYENNES, PLAFONDS & SIMULATEUR X/Y
+       Objectif : Exploiter les données enregistrées pour calculer les moyennes
+       mensuelles par thème, surveiller les plafonds et simuler une décision.
+       ========================================================================= -->
+  <section id="view-analyse" class="view">
+    <div class="card">
+      <h2>Évolution des entrées et sorties</h2>
+      <div class="chart-wrap" id="monthlyChart"></div>
+    </div>
+
+    <div class="card">
+      <h2>Thèmes : Moyenne & Plafond mensuel</h2>
+      <p style="font-size:0.79rem;color:var(--muted);margin-top:-6px;">
+        Appuyez sur <strong>« + Plafond »</strong> à droite d'un thème pour fixer une limite mensuelle et suivre votre marge.
+      </p>
+      <div id="themeStats"></div>
+    </div>
+
+    <div class="card">
+      <h2>Flux net cumulé par source / compte</h2>
+      <div id="sourceStats"></div>
+    </div>
+
+    <!-- Simulateur d'impact financier pour aider à trancher une décision X ou Y -->
+    <div class="card">
+      <h2>Simulateur de décision (Projet X ou Y)</h2>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Charge mensuelle X (€/mois)</label>
+          <input type="number" id="simMonthly" value="100" step="10" oninput="updateSimulator()" />
+        </div>
+        <div class="form-group">
+          <label>Achat ponctuel Y (€)</label>
+          <input type="number" id="simOnce" value="600" step="50" oninput="updateSimulator()" />
+        </div>
+      </div>
+      <div class="sim-res" id="simResult"></div>
+    </div>
+  </section>
+
+  <!-- =========================================================================
+       VUE 4 : DÉPENSES & ENTRÉES CONSTANTES (RÉCURRENCES MODIFIABLES)
+       Objectif : Définir les charges et revenus fixes (loyer, salaire, dons...),
+       modifier leur montant ou leur jour à tout moment, ou les mettre en pause.
+       ========================================================================= -->
+  <section id="view-fixes" class="view">
+    <div class="card">
+      <h2>Ajouter un flux constant</h2>
+      <form onsubmit="addRecurring(event)">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Type</label>
+            <select id="recType" onchange="populateRecThemes()">
+              <option value="Sortie">Sortie fixe</option>
+              <option value="Entrée">Entrée fixe</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Montant mensuel (€)</label>
+            <input type="number" id="recAmount" step="0.01" min="0.01" required placeholder="0.00" />
+          </div>
+          <div class="form-group">
+            <label>Thème</label>
+            <select id="recTheme"></select>
+          </div>
+          <div class="form-group">
+            <label>Source</label>
+            <select id="recSource"></select>
+          </div>
+          <div class="form-group">
+            <label>Jour du mois (1-28)</label>
+            <input type="number" id="recDay" min="1" max="28" value="1" required />
+          </div>
+          <div class="form-group">
+            <label>Libellé</label>
+            <input type="text" id="recLabel" required placeholder="Ex: Loyer, Salaire, Dons..." />
+          </div>
+        </div>
+        <button type="submit" class="btn-primary">Enregistrer ce flux constant</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Mes flux constants (modifiables)</h2>
+      <p style="font-size:0.79rem;color:var(--muted);margin-top:-6px;">Touchez le montant ou le jour pour le modifier à tout moment.</p>
+      <div id="recList"></div>
+    </div>
+  </section>
+
+  <!-- =========================================================================
+       VUE 5 : FLEXIBILITÉ DES THÈMES, SOURCES & IMPORT / EXPORT TABLEUR
+       Objectif : Personnaliser librement les listes de thèmes/sources et
+       exporter/importer les données vers Excel (.xls/.csv) ou sauvegarde (.json).
+       ========================================================================= -->
+  <section id="view-reglages" class="view">
+    <div class="card">
+      <h2>Export Tableur & Sauvegarde Locale</h2>
+      <p style="font-size:0.81rem;color:var(--muted);margin-top:-4px;">
+        <strong>Exporter Tableur (.xls)</strong> génère un fichier ouvrable directement dans Excel / LibreOffice avec 3 onglets (<em>Journal, Synthèse & Moyennes, Constantes</em>).
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <button type="button" class="btn-primary" style="margin:0;" onclick="exportExcelWorkbook()">Exporter Tableur (.xls)</button>
+        <button type="button" class="btn-secondary" onclick="exportCSV()">Exporter CSV brut</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:10px;">
+        <button type="button" class="btn-secondary" onclick="exportJSON()">Sauvegarde complète (.json)</button>
+      </div>
+      <div class="form-group" style="margin-top:8px;">
+        <label>Importer un fichier CSV ou JSON</label>
+        <input type="file" id="importFile" accept=".csv,.json" onchange="importData(event)" />
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Thèmes de dépenses</h2>
+      <div class="chip-wrap" id="chips-out"></div>
+      <div class="inline-add">
+        <input type="text" id="newThemeOut" placeholder="Nouveau thème dépense..." />
+        <button type="button" onclick="addThemeFromInput('Sortie')">Ajouter</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Thèmes d'entrées</h2>
+      <div class="chip-wrap" id="chips-in"></div>
+      <div class="inline-add">
+        <input type="text" id="newThemeIn" placeholder="Nouveau thème entrée..." />
+        <button type="button" onclick="addThemeFromInput('Entrée')">Ajouter</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Sources / Comptes</h2>
+      <div class="chip-wrap" id="chips-src"></div>
+      <div class="inline-add">
+        <input type="text" id="newSource" placeholder="Nouvelle source (ex: Livret A)..." />
+        <button type="button" onclick="addSourceFromInput()">Ajouter</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Barre de navigation inférieure (5 onglets) -->
+<nav class="bottom-nav">
+  <button type="button" id="nav-saisie" class="active" onclick="switchView('saisie', this)">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    Saisie
+  </button>
+  <button type="button" id="nav-calendrier" onclick="switchView('calendrier', this)">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+    Calendrier
+  </button>
+  <button type="button" id="nav-analyse" onclick="switchView('analyse', this)">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+    Analyse
+  </button>
+  <button type="button" id="nav-fixes" onclick="switchView('fixes', this)">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+    Constantes
+  </button>
+  <button type="button" id="nav-reglages" onclick="switchView('reglages', this)">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+    Thèmes/Export
+  </button>
+</nav>
+
+<script>
+  /* ===========================================================================
+     MODULE 1 : CONFIGURATION PWA & UTILITAIRES DE DATE LOCALE
+     =========================================================================== */
+  // IMPORTANT : cette page HTML seule fonctionne en local, mais ne constitue
+  // pas une PWA installable. Une PWA nécessite un manifest.json et un service
+  // worker servis depuis HTTPS (ou localhost). Voir le guide d'installation.
+
+
+  // Retourne la date locale au format AAAA-MM-JJ sans décalage horaire UTC
+  function getLocalISODate(d = new Date()) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  // Formate une date ISO en texte lisible en français (ex: "Hier (Mercredi 18 novembre)")
+  function formatHumanDate(isoStr) {
+    if (!isoStr) return "";
+    const todayStr = getLocalISODate();
+    const yest = new Date();
+    yest.setDate(yest.getDate() - 1);
+    const yestStr = getLocalISODate(yest);
+    const [y, m, d] = isoStr.split("-").map(Number);
+    const dt = new Date(y, m - 1, d);
+    const label = dt.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+    const cap = label.charAt(0).toUpperCase() + label.slice(1);
+    if (isoStr === todayStr) return `Aujourd'hui (${cap})`;
+    if (isoStr === yestStr) return `Hier (${cap})`;
+    return cap;
+  }
+
+  // Échappe les caractères spéciaux pour éviter tout conflit HTML/attributs
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  /* ===========================================================================
+     MODULE 2 : STOCKAGE LOCAL PERSISTANT (localStorage) & ÉTAT INITIAL
+     =========================================================================== */
+  const STORAGE_KEY = "monbudget_local_v2";
+  const defaultState = {
+    themesOut: ["Nourriture", "Enfants", "Famille", "Logement & Énergie", "Voyage", "Dons", "Santé", "Auto & Transport", "Loisirs"],
+    themesIn: ["Salaire", "Cours particuliers", "Aides & Allocations", "Remboursements", "Autres entrées"],
+    sources: ["Compte courant", "Espèces", "Compte épargne", "Carte dédiée"],
+    ceilings: { "Nourriture": 450, "Loisirs": 150 },
+    operations: [],
+    recurring: [
+      { id: 1, active: true, day: 1, type: "Entrée", theme: "Salaire", source: "Compte courant", label: "Salaire principal", amount: 2350 },
+      { id: 2, active: true, day: 5, type: "Sortie", theme: "Logement & Énergie", source: "Compte courant", label: "Loyer + Charges", amount: 795 },
+      { id: 3, active: true, day: 10, type: "Sortie", theme: "Dons", source: "Compte courant", label: "Don mensuel", amount: 80 }
+    ]
+  };
+
+  function loadStateSafely() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return structuredClone(defaultState);
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.operations)) {
+        throw new Error("Structure de sauvegarde invalide");
+      }
+      return {
+        ...structuredClone(defaultState),
+        ...parsed,
+        themesOut: Array.isArray(parsed.themesOut) ? parsed.themesOut : [...defaultState.themesOut],
+        themesIn: Array.isArray(parsed.themesIn) ? parsed.themesIn : [...defaultState.themesIn],
+        sources: Array.isArray(parsed.sources) ? parsed.sources : [...defaultState.sources],
+        operations: parsed.operations,
+        recurring: Array.isArray(parsed.recurring) ? parsed.recurring : [...defaultState.recurring],
+        ceilings: parsed.ceilings && typeof parsed.ceilings === "object" ? parsed.ceilings : {}
+      };
+    } catch (err) {
+      console.error("Impossible de lire la sauvegarde MonBudget :", err);
+      alert("La sauvegarde locale est illisible. L'application démarre avec des données vierges ; ne supprimez pas les données du navigateur avant d'avoir tenté une récupération.");
+      return structuredClone(defaultState);
+    }
+  }
+
+  let state = loadStateSafely();
+  let currentOpType = "Sortie";
+  let calYear = new Date().getFullYear();
+  let calMonth = new Date().getMonth();
+  let calSelectedDate = getLocalISODate();
+
+  function saveState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      return true;
+    } catch (err) {
+      console.error("Échec de sauvegarde MonBudget :", err);
+      alert("La sauvegarde a échoué (stockage indisponible ou saturé). Exportez immédiatement une sauvegarde JSON.");
+      return false;
+    }
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    setTimeout(() => t.classList.remove("show"), 2200);
+  }
+
+  function fmt(n) {
+    return Number(n || 0).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+  }
+
+  /* ===========================================================================
+     MODULE 3 : NAVIGATION & GESTION DYNAMIQUE DES DATES, THÈMES ET SOURCES
+     =========================================================================== */
+  function switchView(name, btn) {
+    document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+    document.getElementById("view-" + name).classList.add("active");
+    document.querySelectorAll("nav.bottom-nav button").forEach(b => b.classList.remove("active"));
+    if (btn) btn.classList.add("active");
+    else document.getElementById("nav-" + name).classList.add("active");
+    renderAll();
+  }
+
+  // Applique un décalage de jours par rapport à aujourd'hui (0 = aujourd'hui, -1 = hier, etc.)
+  function setRelativeDate(offsetDays) {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    document.getElementById("opDate").value = getLocalISODate(d);
+    onOpDateChange();
+  }
+
+  function onOpDateChange() {
+    const val = document.getElementById("opDate").value;
+    document.getElementById("opDateHuman").textContent = formatHumanDate(val);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const [y, m, d] = val.split("-").map(Number);
+    const sel = new Date(y, m - 1, d);
+    const diffDays = Math.round((sel - today) / (1000 * 60 * 60 * 24));
+    document.querySelectorAll(".date-chip").forEach(chip => {
+      chip.classList.toggle("active", Number(chip.dataset.offset) === diffDays);
+    });
+  }
+
+  function setOpType(t) {
+    currentOpType = t;
+    document.getElementById("btn-type-out").classList.toggle("active", t === "Sortie");
+    document.getElementById("btn-type-in").classList.toggle("active", t === "Entrée");
+    populateFormSelects();
+  }
+
+  function populateFormSelects() {
+    const themes = currentOpType === "Sortie" ? state.themesOut : state.themesIn;
+    document.getElementById("opTheme").innerHTML = themes.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+    document.getElementById("opSource").innerHTML = state.sources.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+    document.getElementById("recSource").innerHTML = state.sources.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+    populateRecThemes();
+  }
+
+  function populateRecThemes() {
+    const rType = document.getElementById("recType").value;
+    const themes = rType === "Sortie" ? state.themesOut : state.themesIn;
+    document.getElementById("recTheme").innerHTML = themes.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+  }
+
+  // Ajout rapide d'un nouveau thème directement depuis le formulaire de saisie
+  function quickAddTheme() {
+    const name = prompt("Nom du nouveau thème (" + currentOpType + ") :");
+    if (!name || !name.trim()) return;
+    const clean = name.trim();
+    const list = currentOpType === "Sortie" ? state.themesOut : state.themesIn;
+    if (!list.includes(clean)) {
+      list.push(clean);
+      saveState();
+      populateFormSelects();
+      document.getElementById("opTheme").value = clean;
+      showToast("Thème ajouté : " + clean);
+    }
+  }
+
+  // Ajout rapide d'une nouvelle source / compte depuis le formulaire
+  function quickAddSource() {
+    const name = prompt("Nom de la nouvelle source / compte :");
+    if (!name || !name.trim()) return;
+    const clean = name.trim();
+    if (!state.sources.includes(clean)) {
+      state.sources.push(clean);
+      saveState();
+      populateFormSelects();
+      document.getElementById("opSource").value = clean;
+      showToast("Source ajoutée : " + clean);
+    }
+  }
+
+  function addThemeFromInput(type) {
+    const inp = document.getElementById(type === "Sortie" ? "newThemeOut" : "newThemeIn");
+    const val = inp.value.trim();
+    if (!val) return;
+    const list = type === "Sortie" ? state.themesOut : state.themesIn;
+    if (!list.includes(val)) {
+      list.push(val);
+      saveState();
+      inp.value = "";
+      renderAll();
+      showToast("Thème ajouté");
+    }
+  }
+
+  function removeTheme(type, index) {
+    const list = type === "Sortie" ? state.themesOut : state.themesIn;
+    const val = list[index];
+    if (!val || !confirm(`Supprimer le thème "${val}" de la liste ?`)) return;
+    if (type === "Sortie") {
+      state.themesOut.splice(index, 1);
+      delete state.ceilings[val];
+    } else {
+      state.themesIn.splice(index, 1);
+    }
+    saveState();
+    renderAll();
+  }
+
+  function addSourceFromInput() {
+    const inp = document.getElementById("newSource");
+    const val = inp.value.trim();
+    if (!val) return;
+    if (!state.sources.includes(val)) {
+      state.sources.push(val);
+      saveState();
+      inp.value = "";
+      renderAll();
+      showToast("Source ajoutée");
+    }
+  }
+
+  function removeSource(index) {
+    const val = state.sources[index];
+    if (!val || !confirm(`Supprimer la source "${val}" ?`)) return;
+    state.sources.splice(index, 1);
+    saveState();
+    renderAll();
+  }
+
+  function editThemeCeiling(theme) {
+    const current = state.ceilings[theme] || "";
+    const val = prompt(`Plafond mensuel souhaité pour "${theme}" (€) — laisser vide ou 0 pour supprimer :`, current);
+    if (val === null) return;
+    const num = parseFloat(val);
+    if (!num || num <= 0) delete state.ceilings[theme];
+    else state.ceilings[theme] = num;
+    saveState();
+    renderAll();
+    showToast("Plafond mis à jour");
+  }
+
+  /* ===========================================================================
+     MODULE 4 : ENREGISTREMENT DES OPÉRATIONS & FLUX CONSTANTS
+     =========================================================================== */
+  function addOperation(e) {
+    e.preventDefault();
+    const amount = parseFloat(document.getElementById("opAmount").value);
+    const date = document.getElementById("opDate").value;
+    const theme = document.getElementById("opTheme").value;
+    const source = document.getElementById("opSource").value;
+    const note = document.getElementById("opNote").value.trim();
+    if (!amount || !date) return;
+
+    state.operations.push({
+      id: Date.now(),
+      date,
+      month: date.slice(0, 7),
+      type: currentOpType,
+      theme,
+      source,
+      amount,
+      nature: "Variable",
+      note
+    });
+    // Tri chronologique décroissant (du plus récent au plus ancien)
+    state.operations.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+    saveState();
+    document.getElementById("opAmount").value = "";
+    document.getElementById("opNote").value = "";
+    calSelectedDate = date;
+    renderAll();
+    showToast(`Enregistré au ${date.split("-").reverse().join("/")}`);
+  }
+
+  function editOperationDate(id) {
+    const op = state.operations.find(o => o.id === id);
+    if (!op) return;
+    const nextDate = prompt("Nouvelle date (AAAA-MM-JJ) :", op.date);
+    if (nextDate && isValidISODate(nextDate)) {
+      op.date = nextDate;
+      op.month = nextDate.slice(0, 7);
+      state.operations.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+      saveState();
+      renderAll();
+      showToast("Date modifiée");
+    }
+  }
+
+  function deleteOperation(id) {
+    state.operations = state.operations.filter(o => o.id !== id);
+    saveState();
+    renderAll();
+  }
+
+  function addRecurring(e) {
+    e.preventDefault();
+    const type = document.getElementById("recType").value;
+    const amount = parseFloat(document.getElementById("recAmount").value);
+    const theme = document.getElementById("recTheme").value;
+    const source = document.getElementById("recSource").value;
+    const day = Math.min(28, Math.max(1, parseInt(document.getElementById("recDay").value, 10) || 1));
+    const label = document.getElementById("recLabel").value.trim();
+    if (!amount || !label) return;
+
+    state.recurring.push({ id: Date.now(), active: true, day, type, theme, source, label, amount });
+    saveState();
+    document.getElementById("recAmount").value = "";
+    document.getElementById("recLabel").value = "";
+    renderAll();
+    showToast("Flux constant ajouté");
+  }
+
+  function toggleRecurring(id) {
+    const r = state.recurring.find(x => x.id === id);
+    if (r) { r.active = !r.active; saveState(); renderAll(); }
+  }
+
+  function editRecurringAmount(id) {
+    const r = state.recurring.find(x => x.id === id);
+    if (!r) return;
+    const next = prompt(`Nouveau montant mensuel pour "${r.label}" (€) :`, r.amount);
+    if (next !== null && !isNaN(parseFloat(next)) && parseFloat(next) > 0) {
+      r.amount = parseFloat(next);
+      saveState();
+      renderAll();
+      showToast("Montant mis à jour");
+    }
+  }
+
+  function editRecurringDay(id) {
+    const r = state.recurring.find(x => x.id === id);
+    if (!r) return;
+    const next = prompt(`Jour habituel du mois (1 à 28) pour "${r.label}" :`, r.day || 1);
+    const parsed = parseInt(next, 10);
+    if (!isNaN(parsed) && parsed >= 1 && parsed <= 28) {
+      r.day = parsed;
+      saveState();
+      renderAll();
+      showToast("Jour du mois mis à jour");
+    }
+  }
+
+  function deleteRecurring(id) {
+    state.recurring = state.recurring.filter(x => x.id !== id);
+    saveState();
+    renderAll();
+  }
+
+  // Reconnaît aussi les anciennes opérations constantes créées avant l'ajout de recurringId.
+  function recurringAlreadyApplied(month, recurring) {
+    return state.operations.some(o => {
+      if (o.month !== month || o.nature !== "Constante") return false;
+      if (o.recurringId != null) return String(o.recurringId) === String(recurring.id);
+      return o.note === recurring.label &&
+        o.type === recurring.type &&
+        o.theme === recurring.theme &&
+        o.source === recurring.source;
+    });
+  }
+
+  // Injecte uniquement les flux actifs qui ne sont pas déjà présents dans le mois.
+  function injectRecurringForMonth() {
+    const sel = document.getElementById("monthFilter").value;
+    const targetMonth = sel === "ALL" ? getLocalISODate().slice(0, 7) : sel;
+    const actives = state.recurring.filter(r => r.active);
+    if (!actives.length) { alert("Aucun flux constant actif."); return; }
+
+    const pending = actives.filter(r => !recurringAlreadyApplied(targetMonth, r));
+    if (!pending.length) {
+      showToast(`Tous les flux fixes sont déjà comptabilisés pour ${targetMonth}`);
+      return;
+    }
+    if (!confirm(`Ajouter ${pending.length} flux fixe(s) manquant(s) dans ${targetMonth} ?`)) return;
+
+    const nowId = Date.now();
+    pending.forEach((r, idx) => {
+      const dayStr = String(Math.min(28, Math.max(1, Number(r.day) || 1))).padStart(2, "0");
+      state.operations.push({
+        id: nowId + idx,
+        recurringId: r.id,
+        date: `${targetMonth}-${dayStr}`,
+        month: targetMonth,
+        type: r.type,
+        theme: r.theme,
+        source: r.source,
+        amount: Number(r.amount),
+        nature: "Constante",
+        note: r.label
+      });
+    });
+    state.operations.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+    saveState();
+    renderAll();
+    showToast(`${pending.length} flux fixe(s) ajouté(s) pour ${targetMonth}`);
+  }
+
+  /* ===========================================================================
+     MODULE 5 : CALENDRIER MENSUEL, GRAPHIQUES, CALCULS & SIMULATEUR
+     =========================================================================== */
+  function updateMonthDropdown() {
+    const sel = document.getElementById("monthFilter");
+    const prev = sel.value;
+    const nowM = getLocalISODate().slice(0, 7);
+    const months = Array.from(new Set([nowM, ...state.operations.map(o => o.month)])).sort().reverse();
+    sel.innerHTML = months.map(m => `<option value="${m}">Mois : ${m}</option>`).join("") + `<option value="ALL">Tous les mois (Cumul)</option>`;
+    if (prev && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
+  }
+
+  function shiftCalMonth(delta) {
+    calMonth += delta;
+    if (calMonth < 0) { calMonth = 11; calYear--; }
+    if (calMonth > 11) { calMonth = 0; calYear++; }
+    renderCalendar();
+  }
+
+  function selectCalDay(isoStr) { calSelectedDate = isoStr; renderCalendar(); }
+
+  function addOnSelectedCalDay() {
+    document.getElementById("opDate").value = calSelectedDate;
+    onOpDateChange();
+    switchView("saisie");
+    document.getElementById("opAmount").focus();
+  }
+
+  function renderCalendar() {
+    const monthDate = new Date(calYear, calMonth, 1);
+    document.getElementById("calMonthTitle").textContent = monthDate.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+
+    const dows = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+    let html = dows.map(d => `<div class="cal-dow">${d}</div>`).join("");
+    const firstDow = (monthDate.getDay() + 6) % 7;
+    const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+    const todayStr = getLocalISODate();
+
+    for (let i = 0; i < firstDow; i++) html += `<div class="cal-cell empty"></div>`;
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const iso = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      const dayOps = state.operations.filter(o => o.date === iso);
+      const sumIn = dayOps.filter(o => o.type === "Entrée").reduce((s, o) => s + o.amount, 0);
+      const sumOut = dayOps.filter(o => o.type === "Sortie").reduce((s, o) => s + o.amount, 0);
+      const cls = ["cal-cell", iso === todayStr ? "today" : "", iso === calSelectedDate ? "selected" : ""].join(" ");
+      html += `
+        <div class="${cls}" onclick="selectCalDay('${iso}')">
+          <div class="cal-day-num">${day}</div>
+          <div class="cal-dots">
+            ${sumIn > 0 ? `<span class="cal-in">+${Math.round(sumIn)}€</span>` : ""}
+            ${sumOut > 0 ? `<span class="cal-out">-${Math.round(sumOut)}€</span>` : ""}
+          </div>
+        </div>
+      `;
+    }
+    document.getElementById("calGrid").innerHTML = html;
+
+    document.getElementById("calSelectedDayTitle").textContent = formatHumanDate(calSelectedDate);
+    const selOps = state.operations.filter(o => o.date === calSelectedDate);
+    const dayContainer = document.getElementById("calDayOps");
+    if (!selOps.length) {
+      dayContainer.innerHTML = `<p style="color:var(--muted);font-size:0.85rem;margin:6px 0;">Aucune opération enregistrée ce jour-là.</p>`;
+    } else {
+      dayContainer.innerHTML = selOps.map(o => `
+        <div class="op-item">
+          <div class="op-left">
+            <div class="op-title">${escapeHtml(o.theme)} ${o.note ? "• " + escapeHtml(o.note) : ""}</div>
+            <div class="op-meta">${escapeHtml(o.source)} ${o.nature === "Constante" ? "• Fixe" : ""}</div>
+          </div>
+          <div class="op-right">
+            <span class="op-amt ${o.type === "Entrée" ? "in" : "out"}">${o.type === "Entrée" ? "+" : "-"}${fmt(o.amount)}</span>
+            <button class="icon-btn" onclick="editOperationDate(${o.id})" title="Changer la date">📅</button>
+            <button class="icon-btn" onclick="deleteOperation(${o.id})" title="Supprimer">✕</button>
+          </div>
+        </div>
+      `).join("");
+    }
+  }
+
+  function renderMonthlySVGChart() {
+    const map = {};
+    state.operations.forEach(o => {
+      if (!map[o.month]) map[o.month] = { in: 0, out: 0 };
+      if (o.type === "Entrée") map[o.month].in += o.amount;
+      else map[o.month].out += o.amount;
+    });
+    const months = Object.keys(map).sort().slice(-6);
+    const container = document.getElementById("monthlyChart");
+    if (!months.length) {
+      container.innerHTML = `<p style="color:var(--muted);font-size:0.85rem;">Les courbes mensuelles apparaîtront dès vos premières saisies.</p>`;
+      return;
+    }
+    const maxVal = Math.max(100, ...months.map(m => Math.max(map[m].in, map[m].out)));
+    const colW = 76;
+    const w = Math.max(300, months.length * colW + 20);
+    const h = 140;
+    let bars = "";
+    months.forEach((m, idx) => {
+      const x = 16 + idx * colW;
+      const hIn = Math.round((map[m].in / maxVal) * 95);
+      const hOut = Math.round((map[m].out / maxVal) * 95);
+      bars += `
+        <rect x="${x}" y="${110 - hIn}" width="18" height="${hIn}" rx="4" fill="#1E8449" />
+        <rect x="${x + 22}" y="${110 - hOut}" width="18" height="${hOut}" rx="4" fill="#C0392B" />
+        <text x="${x + 20}" y="128" font-size="10" text-anchor="middle" fill="#57606A" font-weight="600">${m.slice(2)}</text>
+      `;
+    });
+    container.innerHTML = `
+      <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+        <line x1="10" y1="110" x2="${w - 10}" y2="110" stroke="#D0D7DE" stroke-width="1"/>
+        ${bars}
+      </svg>
+      <div style="font-size:0.75rem;color:var(--muted);display:flex;gap:14px;margin-top:2px;">
+        <span><strong style="color:var(--green);">■</strong> Entrées</span>
+        <span><strong style="color:var(--red);">■</strong> Sorties</span>
+      </div>
+    `;
+  }
+
+  function renderAll() {
+    populateFormSelects();
+    updateMonthDropdown();
+    const filterM = document.getElementById("monthFilter").value;
+    const currentMonthStr = filterM === "ALL" ? getLocalISODate().slice(0, 7) : filterM;
+    const filtered = filterM === "ALL" ? state.operations : state.operations.filter(o => o.month === filterM);
+
+    const totalIn = filtered.filter(o => o.type === "Entrée").reduce((s, o) => s + o.amount, 0);
+    const totalOut = filtered.filter(o => o.type === "Sortie").reduce((s, o) => s + o.amount, 0);
+    const sav = totalIn - totalOut;
+    document.getElementById("kpi-in").textContent = fmt(totalIn);
+    document.getElementById("kpi-out").textContent = fmt(totalOut);
+    document.getElementById("kpi-sav").textContent = fmt(sav);
+
+    // Calcul du Reste à Vivre Réel (projection incluant les flux constants non encore injectés ce mois)
+    const monthOps = state.operations.filter(o => o.month === currentMonthStr);
+    const pendingFixesOut = state.recurring
+      .filter(r => r.active && r.type === "Sortie" && !recurringAlreadyApplied(currentMonthStr, r))
+      .reduce((s, r) => s + Number(r.amount || 0), 0);
+    const pendingFixesIn = state.recurring
+      .filter(r => r.active && r.type === "Entrée" && !recurringAlreadyApplied(currentMonthStr, r))
+      .reduce((s, r) => s + Number(r.amount || 0), 0);
+
+    const projectedSav = (monthOps.filter(o => o.type === "Entrée").reduce((s, o) => s + o.amount, 0) + pendingFixesIn)
+                       - (monthOps.filter(o => o.type === "Sortie").reduce((s, o) => s + o.amount, 0) + pendingFixesOut);
+    document.getElementById("proj-rav").textContent = fmt(projectedSav);
+    document.getElementById("proj-sub").textContent = pendingFixesOut > 0
+      ? `Intègre ${fmt(pendingFixesOut)} de charges fixes pas encore débitées sur ${currentMonthStr}.`
+      : `Toutes les charges fixes connues de ${currentMonthStr} sont déjà comptabilisées.`;
+    const rate = totalIn > 0 ? Math.round((sav / totalIn) * 100) : 0;
+    document.getElementById("proj-rate").textContent = `Épargne : ${rate}%`;
+
+    // Historique
+    document.getElementById("opCount").textContent = `${filtered.length} op.`;
+    const opList = document.getElementById("opList");
+    if (!filtered.length) {
+      opList.innerHTML = `<p style="color:var(--muted);font-size:0.87rem;text-align:center;padding:12px 0;">Aucune opération sur cette période.</p>`;
+    } else {
+      opList.innerHTML = filtered.map(o => `
+        <div class="op-item">
+          <div class="op-left">
+            <div class="op-title">${escapeHtml(o.theme)} ${o.note ? "• " + escapeHtml(o.note) : ""}</div>
+            <div class="op-meta">${o.date.split("-").reverse().join("/")} • ${escapeHtml(o.source)} ${o.nature === "Constante" ? "• Fixe" : ""}</div>
+          </div>
+          <div class="op-right">
+            <span class="op-amt ${o.type === "Entrée" ? "in" : "out"}">${o.type === "Entrée" ? "+" : "-"}${fmt(o.amount)}</span>
+            <button class="icon-btn" onclick="editOperationDate(${o.id})" title="Modifier la date">📅</button>
+            <button class="icon-btn" onclick="deleteOperation(${o.id})" title="Supprimer">✕</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    // Analyse par thème (Moyennes mensuelles + Plafonds d'alerte)
+    const recordedMonths = state.operations.map(o => o.month).filter(m => /^\\d{4}-\\d{2}$/.test(m)).sort();
+    const lastMonth = getLocalISODate().slice(0, 7);
+    const firstMonth = recordedMonths.length ? recordedMonths[0] : lastMonth;
+    const endMonth = recordedMonths.length ? (recordedMonths[recordedMonths.length - 1] > lastMonth ? recordedMonths[recordedMonths.length - 1] : lastMonth) : lastMonth;
+    const [fy, fm] = firstMonth.split("-").map(Number);
+    const [ey, em] = endMonth.split("-").map(Number);
+    const nbMonths = Math.max(1, (ey - fy) * 12 + (em - fm) + 1);
+    const allOutOps = state.operations.filter(o => o.type === "Sortie");
+    const grandOut = allOutOps.reduce((s, o) => s + o.amount, 0);
+
+    const themeTotals = {};
+    const themeCurrentMonth = {};
+    state.themesOut.forEach(t => { themeTotals[t] = 0; themeCurrentMonth[t] = 0; });
+    allOutOps.forEach(o => {
+      themeTotals[o.theme] = (themeTotals[o.theme] || 0) + o.amount;
+      if (o.month === currentMonthStr) themeCurrentMonth[o.theme] = (themeCurrentMonth[o.theme] || 0) + o.amount;
+    });
+
+    const sortedThemes = Object.entries(themeTotals).sort((a, b) => b[1] - a[1]);
+    const themeStats = document.getElementById("themeStats");
+    themeStats.innerHTML = sortedThemes.map(([th, sum], idx) => {
+      const avg = sum / nbMonths;
+      const curM = themeCurrentMonth[th] || 0;
+      const cap = state.ceilings[th];
+      let barPct = grandOut > 0 ? (sum / grandOut) * 100 : 0;
+      let fillCls = "";
+      let badgeHtml = `<button type="button" class="btn-secondary cap-trigger" data-theme="${escapeHtml(th)}" style="padding:2px 7px;font-size:0.7rem;">+ Plafond</button>`;
+
+      if (cap && cap > 0) {
+        const ratio = (curM / cap) * 100;
+        barPct = Math.min(100, ratio);
+        if (ratio >= 100) {
+          fillCls = "over";
+          badgeHtml = `<span class="badge-cap over cap-trigger" data-theme="${escapeHtml(th)}">Dépassé (${Math.round(ratio)}%)</span>`;
+        } else if (ratio >= 80) {
+          fillCls = "warn";
+          badgeHtml = `<span class="badge-cap warn cap-trigger" data-theme="${escapeHtml(th)}">${Math.round(ratio)}% du plafond</span>`;
+        } else {
+          badgeHtml = `<span class="badge-cap ok cap-trigger" data-theme="${escapeHtml(th)}">${fmt(curM)} / ${fmt(cap)}</span>`;
+        }
+      }
+
+      return `
+        <div class="bar-row">
+          <div class="bar-head">
+            <span class="b-name">${escapeHtml(th)} ${badgeHtml}</span>
+            <span class="b-vals">Moy: <strong>${fmt(avg)}/m</strong> • Ce mois: ${fmt(curM)}</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill ${fillCls}" style="width:${barPct}%"></div></div>
+        </div>
+      `;
+    }).join("");
+
+    // Liaison sûre des événements de plafond (gère les apostrophes sans erreur)
+    themeStats.querySelectorAll(".cap-trigger").forEach(el => {
+      el.addEventListener("click", () => editThemeCeiling(el.dataset.theme));
+    });
+
+    // Flux par source
+    document.getElementById("sourceStats").innerHTML = state.sources.map(src => {
+      const sIn = state.operations.filter(o => o.source === src && o.type === "Entrée").reduce((s, o) => s + o.amount, 0);
+      const sOut = state.operations.filter(o => o.source === src && o.type === "Sortie").reduce((s, o) => s + o.amount, 0);
+      return `
+        <div class="op-item">
+          <div class="op-left"><div class="op-title">${escapeHtml(src)}</div><div class="op-meta">Entrées: ${fmt(sIn)} • Sorties: ${fmt(sOut)}</div></div>
+          <div class="op-right"><span class="op-amt ${sIn - sOut >= 0 ? "in" : "out"}">${fmt(sIn - sOut)}</span></div>
+        </div>
+      `;
+    }).join("");
+
+    // Constantes
+    document.getElementById("recList").innerHTML = state.recurring.map(r => `
+      <div class="op-item" style="opacity:${r.active ? 1 : 0.5}">
+        <div class="op-left">
+          <div class="op-title">${escapeHtml(r.label)} (${escapeHtml(r.theme)})</div>
+          <div class="op-meta">${r.type} • ${escapeHtml(r.source)} • <span style="text-decoration:underline;cursor:pointer;" onclick="editRecurringDay(${r.id})">Le ${r.day || 1} du mois</span></div>
+        </div>
+        <div class="op-right">
+          <span class="op-amt ${r.type === "Entrée" ? "in" : "out"}" style="cursor:pointer;text-decoration:underline;" onclick="editRecurringAmount(${r.id})">${fmt(r.amount)}</span>
+          <button class="btn-secondary" style="padding:4px 8px;font-size:0.74rem;" onclick="toggleRecurring(${r.id})">${r.active ? "Pause" : "Activer"}</button>
+          <button class="icon-btn" onclick="deleteRecurring(${r.id})">✕</button>
+        </div>
+      </div>
+    `).join("");
+
+    // Pastilles réglages (indexées numériquement pour supporter n'importe quel caractère)
+    document.getElementById("chips-out").innerHTML = state.themesOut
+      .map((t, i) => `<span class="chip">${escapeHtml(t)} <span class="x" onclick="removeTheme('Sortie', ${i})">×</span></span>`).join("");
+    document.getElementById("chips-in").innerHTML = state.themesIn
+      .map((t, i) => `<span class="chip">${escapeHtml(t)} <span class="x" onclick="removeTheme('Entrée', ${i})">×</span></span>`).join("");
+    document.getElementById("chips-src").innerHTML = state.sources
+      .map((s, i) => `<span class="chip">${escapeHtml(s)} <span class="x" onclick="removeSource(${i})">×</span></span>`).join("");
+
+    renderMonthlySVGChart();
+    renderCalendar();
+    updateSimulator();
+  }
+
+  // Simulateur d'impact financier pour aider à décider d'une dépense mensuelle X ou ponctuelle Y
+  function updateSimulator() {
+    const recordedMonths = state.operations.map(o => o.month).filter(m => /^\\d{4}-\\d{2}$/.test(m)).sort();
+    const lastMonth = getLocalISODate().slice(0, 7);
+    const firstMonth = recordedMonths.length ? recordedMonths[0] : lastMonth;
+    const endMonth = recordedMonths.length && recordedMonths[recordedMonths.length - 1] > lastMonth ? recordedMonths[recordedMonths.length - 1] : lastMonth;
+    const [fy, fm] = firstMonth.split("-").map(Number);
+    const [ey, em] = endMonth.split("-").map(Number);
+    const allMonths = Math.max(1, (ey - fy) * 12 + (em - fm) + 1);
+    const totalIn = state.operations.filter(o => o.type === "Entrée").reduce((s, o) => s + o.amount, 0);
+    const totalOut = state.operations.filter(o => o.type === "Sortie").reduce((s, o) => s + o.amount, 0);
+    const avgSav = (totalIn - totalOut) / allMonths;
+
+    const simX = parseFloat(document.getElementById("simMonthly").value) || 0;
+    const simY = parseFloat(document.getElementById("simOnce").value) || 0;
+    const newMonthlySav = avgSav - simX;
+    const annualSav = (newMonthlySav * 12) - simY;
+    const monthsForY = avgSav > 0 ? (simY / avgSav).toFixed(1) : "∞";
+
+    document.getElementById("simResult").innerHTML = `
+      • Solde net mensuel moyen actuel : <strong>${fmt(avgSav)}/mois</strong><br/>
+      • Après la charge mensuelle X (${fmt(simX)}) : <strong>${fmt(newMonthlySav)}/mois</strong><br/>
+      • Épargne annuelle nette après X et Y : <strong>${fmt(annualSav)}</strong><br/>
+      • Temps théorique pour financer l'achat Y (${fmt(simY)}) avec le solde net moyen : <strong>${monthsForY} mois</strong>
+    `;
+  }
+
+  /* ===========================================================================
+     MODULE 6 : IMPORT / EXPORT (EXCEL MULTI-ONGLETS .XLS, CSV & JSON)
+     =========================================================================== */
+  function exportCSV() {
+    const headers = ["Date", "Mois", "Type", "Thème", "Source", "Montant", "Nature", "Note"];
+    const rows = state.operations.map(o => [
+      o.date,
+      o.month,
+      o.type,
+      `"${o.theme.replace(/"/g, '""')}"`,
+      `"${o.source.replace(/"/g, '""')}"`,
+      o.amount.toFixed(2),
+      o.nature || "Variable",
+      `"${(o.note || "").replace(/"/g, '""')}"`
+    ]);
+    const csvContent = "\uFEFF" + [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
+    downloadBlob(csvContent, `budget_export_${getLocalISODate()}.csv`, "text/csv;charset=utf-8;");
+  }
+
+  // Génère un classeur Excel multi-onglets (Journal, Synthèse & Moyennes, Flux Constants)
+  function exportExcelWorkbook() {
+    const nbMonths = Math.max(1, new Set(state.operations.map(o => o.month)).size);
+    const journalRows = state.operations.map(o => `
+      <Row>
+        <Cell><Data ss:Type="String">${o.date}</Data></Cell>
+        <Cell><Data ss:Type="String">${o.month}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(o.type)}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(o.theme)}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(o.source)}</Data></Cell>
+        <Cell><Data ss:Type="Number">${o.amount.toFixed(2)}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(o.nature || "Variable")}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(o.note || "")}</Data></Cell>
+      </Row>
+    `).join("");
+
+    const themeRows = state.themesOut.map(th => {
+      const sum = state.operations.filter(o => o.type === "Sortie" && o.theme === th).reduce((s, o) => s + o.amount, 0);
+      const avg = sum / nbMonths;
+      const cap = state.ceilings[th] || 0;
+      return `
+        <Row>
+          <Cell><Data ss:Type="String">${escapeXml(th)}</Data></Cell>
+          <Cell><Data ss:Type="Number">${sum.toFixed(2)}</Data></Cell>
+          <Cell><Data ss:Type="Number">${avg.toFixed(2)}</Data></Cell>
+          <Cell><Data ss:Type="Number">${cap.toFixed(2)}</Data></Cell>
+        </Row>
+      `;
+    }).join("");
+
+    const constRows = state.recurring.map(r => `
+      <Row>
+        <Cell><Data ss:Type="String">${r.active ? "Actif" : "Inactif"}</Data></Cell>
+        <Cell><Data ss:Type="Number">${r.day || 1}</Data></Cell>
+        <Cell><Data ss:Type="String">${r.type}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(r.theme)}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(r.source)}</Data></Cell>
+        <Cell><Data ss:Type="String">${escapeXml(r.label)}</Data></Cell>
+        <Cell><Data ss:Type="Number">${r.amount.toFixed(2)}</Data></Cell>
+      </Row>
+    `).join("");
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>
+    <Style ss:ID="Header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1B365D" ss:Pattern="Solid"/></Style>
+  </Styles>
+  <Worksheet ss:Name="Journal Opérations">
+    <Table>
+      <Row ss:StyleID="Header">
+        <Cell><Data ss:Type="String">Date</Data></Cell>
+        <Cell><Data ss:Type="String">Mois</Data></Cell>
+        <Cell><Data ss:Type="String">Type</Data></Cell>
+        <Cell><Data ss:Type="String">Thème</Data></Cell>
+        <Cell><Data ss:Type="String">Source</Data></Cell>
+        <Cell><Data ss:Type="String">Montant (€)</Data></Cell>
+        <Cell><Data ss:Type="String">Nature</Data></Cell>
+        <Cell><Data ss:Type="String">Note</Data></Cell>
+      </Row>
+      ${journalRows}
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Synthèse &amp; Moyennes">
+    <Table>
+      <Row ss:StyleID="Header">
+        <Cell><Data ss:Type="String">Thème Dépense</Data></Cell>
+        <Cell><Data ss:Type="String">Total Cumulé (€)</Data></Cell>
+        <Cell><Data ss:Type="String">Moyenne Mensuelle (€)</Data></Cell>
+        <Cell><Data ss:Type="String">Plafond Mensuel (€)</Data></Cell>
+      </Row>
+      ${themeRows}
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Flux Constants">
+    <Table>
+      <Row ss:StyleID="Header">
+        <Cell><Data ss:Type="String">Statut</Data></Cell>
+        <Cell><Data ss:Type="String">Jour du mois</Data></Cell>
+        <Cell><Data ss:Type="String">Type</Data></Cell>
+        <Cell><Data ss:Type="String">Thème</Data></Cell>
+        <Cell><Data ss:Type="String">Source</Data></Cell>
+        <Cell><Data ss:Type="String">Libellé</Data></Cell>
+        <Cell><Data ss:Type="String">Montant Mensuel (€)</Data></Cell>
+      </Row>
+      ${constRows}
+    </Table>
+  </Worksheet>
+</Workbook>`;
+    downloadBlob(xml, `Suivi_Budget_${getLocalISODate()}.xls`, "application/vnd.ms-excel");
+  }
+
+  function escapeXml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function exportJSON() {
+    downloadBlob(JSON.stringify(state, null, 2), `sauvegarde_budget_${getLocalISODate()}.json`, "application/json");
+  }
+
+  // Téléchargement compatible desktop & navigateurs mobiles en mode fichier local (file://)
+  function downloadBlob(content, filename, mime) {
+    try {
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      const a = document.createElement("a");
+      a.href = "data:" + mime + "," + encodeURIComponent(content);
+      a.download = filename;
+      a.click();
+    }
+  }
+
+  function parseCSVLine(line, separator) {
+    const result = [];
+    let value = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { value += '"'; i++; }
+        else inQuotes = !inQuotes;
+      } else if (ch === separator && !inQuotes) {
+        result.push(value);
+        value = "";
+      } else value += ch;
+    }
+    result.push(value);
+    return result;
+  }
+
+  function isValidISODate(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const [y, m, d] = value.split("-").map(Number);
+    const date = new Date(y, m - 1, d);
+    return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
+  }
+
+  function importData(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      const txt = String(ev.target.result || "").replace(/^\uFEFF/, "");
+      if (file.name.toLowerCase().endsWith(".json")) {
+        try {
+          const parsed = JSON.parse(txt);
+          if (!parsed || typeof parsed !== "object" ||
+              !Array.isArray(parsed.operations) ||
+              !Array.isArray(parsed.themesOut) ||
+              !Array.isArray(parsed.themesIn) ||
+              !Array.isArray(parsed.sources) ||
+              !Array.isArray(parsed.recurring)) throw new Error("Structure JSON incomplète");
+          if (!confirm("Remplacer toutes les données actuelles par cette sauvegarde ? Pensez à exporter une sauvegarde avant de continuer.")) return;
+          state = { ...parsed, ceilings: parsed.ceilings && typeof parsed.ceilings === "object" ? parsed.ceilings : {} };
+          saveState();
+          renderAll();
+          showToast("Sauvegarde JSON restaurée !");
+        } catch (err) {
+          console.error(err);
+          alert("Fichier JSON invalide ou incompatible. Les données actuelles ont été conservées.");
+        } finally {
+          e.target.value = "";
+        }
+      } else if (file.name.toLowerCase().endsWith(".csv")) {
+        const lines = txt.split(/\r?\n/).filter(l => l.trim());
+        if (!lines.length) { alert("Fichier CSV vide."); e.target.value = ""; return; }
+        const separator = lines[0].includes(";") ? ";" : ",";
+        let added = 0;
+        const errors = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cols = parseCSVLine(lines[i], separator).map(c => c.trim());
+          if (cols.length < 6) { errors.push(i + 1); continue; }
+          const date = cols[0].replace(/^\uFEFF/, "");
+          const type = cols[2], theme = cols[3], source = cols[4];
+          const amount = Number(String(cols[5]).replace(",", "."));
+          if (!isValidISODate(date) || !["Sortie", "Entrée"].includes(type) ||
+              !theme || !source || !Number.isFinite(amount) || amount <= 0) {
+            errors.push(i + 1);
+            continue;
+          }
+          const nature = cols[6] || "Variable", note = cols[7] || "";
+          if (type === "Sortie" && !state.themesOut.includes(theme)) state.themesOut.push(theme);
+          if (type === "Entrée" && !state.themesIn.includes(theme)) state.themesIn.push(theme);
+          if (!state.sources.includes(source)) state.sources.push(source);
+          state.operations.push({ id: Date.now() + i, date, month: date.slice(0, 7), type, theme, source, amount, nature, note });
+          added++;
+        }
+        state.operations.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+        saveState();
+        renderAll();
+        showToast(`${added} opération(s) importée(s)`);
+        if (errors.length) alert(`${errors.length} ligne(s) ignorée(s) car invalide(s). Première(s) ligne(s) : ${errors.slice(0, 8).join(", ")}.`);
+        e.target.value = "";
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  /* ===========================================================================
+     INITIALISATION AU DÉMARRAGE DE L'APPLICATION
+     =========================================================================== */
+  document.getElementById("opDate").value = getLocalISODate();
+  document.getElementById("todayBadge").textContent =
+    new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) + " • Local";
+  onOpDateChange();
+  document.getElementById("monthFilter").addEventListener("change", renderAll);
+  renderAll();
+</script>
+<script>
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js").catch(err => console.error("Service worker :", err));
+    });
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# MonBudget Local — version PWA corrigée
+
+## Installation
+1. Décompresser l'archive.
+2. Héberger le contenu du dossier sur une adresse **HTTPS** (GitHub Pages, Netlify, votre hébergement web, etc.).
+3. Ouvrir cette adresse dans Chrome sur Android.
+4. Menu ⋮ → **Installer l'application** ou **Ajouter à l'écran d'accueil**.
+5. Ouvrir une première fois l'application avec Internet pour mettre les fichiers en cache. Elle sera ensuite accessible hors ligne.
+
+L'ouverture directe de `index.html` depuis le gestionnaire de fichiers ne permet pas l'installation PWA : le service worker exige HTTPS (ou localhost).
+
+## Données
+Les opérations sont stockées dans le `localStorage` du navigateur, sur l'appareil et pour cette adresse web. Avant de passer de l'ancien fichier local à la PWA, exporter une sauvegarde JSON depuis l'ancienne version, puis l'importer dans la PWA. Les données du fichier local ne migrent pas automatiquement vers la nouvelle adresse.
+
+## Confidentialité
+Aucun compte bancaire n'est connecté et aucune donnée n'est envoyée à un serveur par le code de l'application. L'hébergement sert uniquement les fichiers HTML, manifest, icônes et service worker.
